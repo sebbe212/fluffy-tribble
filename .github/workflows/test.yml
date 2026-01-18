@@ -10,7 +10,7 @@ jobs:
     steps:
       - name: Enable Screen Sharing (VNC)
         run: |
-          # Enable Screen Sharing (VNC - macOS equivalent of RDP)
+          # Enable Screen Sharing
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
@@ -32,72 +32,38 @@ jobs:
           sudo dscl . -passwd /Users/test "$PASSWORD"
           sudo dscl . -append /Groups/admin GroupMembership test
           
-          # Create home directory
           sudo createhomedir -c -u test
           
-          # Save credentials to environment
-          echo "test_CREDS=User: test | Password: $PASSWORD" >> $GITHUB_ENV
           echo "test_PASSWORD=$PASSWORD" >> $GITHUB_ENV
 
-      - name: Install Tailscale
-        run: |
-          # Download and install Tailscale
-          curl -fsSL https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg -o tailscale.pkg
-          sudo installer -pkg tailscale.pkg -target /
-          rm tailscale.pkg
-          
-          # Wait for installation
-          sleep 5
-
-      - name: Connect to Tailscale
+      - name: Install and Setup Tailscale
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Start Tailscale
-          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up \
+          # Install via Homebrew
+          brew install tailscale
+          
+          # Start services
+          brew services start tailscale
+          sleep 10
+          
+          # Connect
+          tailscale up \
             --authkey="${TAILSCALE_AUTH_KEY}" \
             --hostname="gh-runner-${GITHUB_RUN_ID}"
           
-          # Get Tailscale IP
-          retry=0
-          while [ $retry -lt 10 ]; do
-            TAILSCALE_IP=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 2>/dev/null | head -n1)
-            if [ -n "$TAILSCALE_IP" ]; then
-              echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-              break
-            fi
-            sleep 5
-            retry=$((retry+1))
-          done
-          
-          if [ -z "$TAILSCALE_IP" ]; then
-            echo "Failed to get Tailscale IP"
-            exit 1
-          fi
-
-      - name: Verify
-        run: |
-          echo "Tailscale IP: $TAILSCALE_IP"
-          echo "VNC is enabled on port 5900"
-          
-          # Show Tailscale status
-          /Applications/Tailscale.app/Contents/MacOS/Tailscale status
+          # Get IP
+          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
 
       - name: Maintain Connection
         run: |
-          echo ""
           echo "=== CONNECTION INFO ==="
-          echo "Address: $TAILSCALE_IP"
-          echo "VNC Port: 5900"
-          echo "Username: test"
+          echo "VNC: vnc://test@$TAILSCALE_IP:5900"
           echo "Password: $test_PASSWORD"
           echo "===================="
-          echo ""
-          echo "Connect using: vnc://test@$TAILSCALE_IP:5900"
-          echo ""
           
-          # Keep runner active
           while true; do
-            echo "[$(date)] Active - Cancel workflow to terminate"
+            echo "[$(date)] Active"
             sleep 300
           done
