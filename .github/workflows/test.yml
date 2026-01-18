@@ -1,69 +1,42 @@
-name: CI
-
-on:
+name: Disala - MacOS RDP
+on: 
   workflow_dispatch:
 
 jobs:
-  secure-test:
+  build:
+    name: Disala - MacOS RDP - Tailscale
     runs-on: macos-latest
-
+    
     steps:
-      - name: Enable Screen Sharing (VNC)
-        run: |
-          # Enable Screen Sharing
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "TempPass123!" \
-            -restart -agent -privs -all
+    - name: Quick Setup
+      env:
+        TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      run: |
+        # Setup VNC with simple password
+        sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+          -activate -configure -access -on \
+          -configure -allowAccessFor -allUsers \
+          -configure -restart -agent -privs -all
+        
+        # Install and start Tailscale
+        brew install tailscale
+        sudo tailscaled > /dev/null 2>&1 &
+        sleep 5
+        
+        # Connect
+        tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="mac-${GITHUB_RUN_ID}"
+        
+        # Get connection info
+        TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+        
+        echo "===================================="
+        echo "VNC: vnc://$TAILSCALE_IP:5900"
+        echo "User: runner (or use current user)"
+        echo "===================================="
 
-      - name: Create User with Secure Password
-        run: |
-          # Generate secure password
-          PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-12)!Aa1
-          
-          # Create user
-          sudo dscl . -create /Users/test
-          sudo dscl . -create /Users/test UserShell /bin/bash
-          sudo dscl . -create /Users/test RealName "Test User"
-          sudo dscl . -create /Users/test UniqueID 1001
-          sudo dscl . -create /Users/test PrimaryGroupID 20
-          sudo dscl . -create /Users/test NFSHomeDirectory /Users/test
-          sudo dscl . -passwd /Users/test "$PASSWORD"
-          sudo dscl . -append /Groups/admin GroupMembership test
-          
-          sudo createhomedir -c -u test
-          
-          echo "test_PASSWORD=$PASSWORD" >> $GITHUB_ENV
-
-      - name: Install and Setup Tailscale
-        env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          # Install via Homebrew
-          brew install tailscale
-          
-          # Start services
-          brew services start tailscale
-          sleep 10
-          
-          # Connect
-          tailscale up \
-            --authkey="${TAILSCALE_AUTH_KEY}" \
-            --hostname="gh-runner-${GITHUB_RUN_ID}"
-          
-          # Get IP
-          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
-          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-
-      - name: Maintain Connection
-        run: |
-          echo "=== CONNECTION INFO ==="
-          echo "VNC: vnc://test@$TAILSCALE_IP:5900"
-          echo "Password: $test_PASSWORD"
-          echo "===================="
-          
-          while true; do
-            echo "[$(date)] Active"
-            sleep 300
-          done
+    - name: Keep Alive
+      run: |
+        while true; do
+          echo "[$(date)] Active - Cancel workflow to stop"
+          sleep 300
+        done
