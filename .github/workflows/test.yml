@@ -1,0 +1,58 @@
+name: CIS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-test:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code (optional)
+        uses: actions/checkout@v3
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg -o Tailscale-latest.pkg
+          sudo installer -pkg Tailscale-latest.pkg -target /
+          rm Tailscale-latest.pkg
+
+      - name: Start Tailscale with auth key
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=gh-runner-${GITHUB_RUN_ID}
+          
+          # Wait for Tailscale IP
+          retry=0
+          while [ $retry -lt 10 ]; do
+            IP=$(tailscale ip -4 | head -n1)
+            if [ -n "$IP" ]; then
+              echo "TAILSCALE_IP=$IP" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 5
+            retry=$((retry+1))
+          done
+
+          if [ -z "$IP" ]; then
+            echo "Tailscale IP not found. Exiting."
+            exit 1
+          fi
+
+      - name: Show Tailscale IP
+        run: |
+          echo "Tailscale IP is $TAILSCALE_IP"
+
+      - name: Keep Runner Alive for Remote Access
+        run: |
+          echo ""
+          echo "=============================="
+          echo " Tailscale IP: $TAILSCALE_IP"
+          echo "=============================="
+          echo ""
+          echo "Runner will remain alive for manual connection..."
+          while true; do
+            echo "[$(date)] Runner active - press cancel to stop"
+            sleep 300
+          done
