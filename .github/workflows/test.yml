@@ -10,7 +10,7 @@ jobs:
     steps:
     - name: Create RDP User with Strong Password
       run: |
-        # Generate strong random password (16 chars with uppercase, lowercase, numbers, special chars)
+        # Generate strong random password
         PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | head -c 12)
         SPECIAL=$(echo '!@#$%^&*' | fold -w1 | shuf | head -n2 | tr -d '\n')
         NUMBER=$(echo '0123456789' | fold -w1 | shuf | head -n2 | tr -d '\n')
@@ -29,10 +29,10 @@ jobs:
         # Create home directory
         sudo createhomedir -c -u rdp
         
-        # Save password to environment
+        # Save password
         echo "RDP_PASSWORD=$FINAL_PASSWORD" >> $GITHUB_ENV
         
-        # Enable VNC/Screen Sharing
+        # Enable VNC
         sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
           -activate -configure -access -on \
           -clientopts -setvnclegacy -vnclegacy yes \
@@ -41,53 +41,34 @@ jobs:
           -configure -access -on -users rdp \
           -configure -restart -agent -privs -all
 
-    - name: Install Tailscale
-      run: |
-        # Download Tailscale binaries directly
-        curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.54.0_darwin_amd64.tgz -o tailscale.tgz
-        tar -xzf tailscale.tgz
-        cd tailscale_*_darwin_amd64
-        
-        # Start daemon
-        sudo ./tailscaled > /dev/null 2>&1 &
-        sleep 10
-
-    - name: Connect to Tailscale Network
+    - name: Install and Setup Tailscale
       env:
         TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       run: |
-        cd tailscale_*_darwin_amd64
+        # Install Tailscale via Homebrew
+        brew install tailscale
         
-        # Connect with auth key
-        sudo ./tailscale up \
+        # Start Tailscale daemon
+        sudo tailscaled > /dev/null 2>&1 &
+        sleep 10
+        
+        # Connect to Tailscale
+        tailscale up \
           --authkey="${TAILSCALE_AUTH_KEY}" \
-          --hostname="macos-rdp-${GITHUB_RUN_ID}" \
-          --accept-routes=false \
-          --accept-dns=false
+          --hostname="macos-rdp-${GITHUB_RUN_ID}"
         
-        # Wait and get IP
-        sleep 15
-        
-        # Get Tailscale IP with retries
-        for i in {1..10}; do
-          TAILSCALE_IP=$(sudo ./tailscale ip -4 2>/dev/null | head -n1)
-          if [ -n "$TAILSCALE_IP" ]; then
-            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-            break
-          fi
-          echo "Waiting for Tailscale IP... (attempt $i/10)"
-          sleep 5
-        done
+        # Get IP
+        sleep 10
+        TAILSCALE_IP=$(tailscale ip -4 | head -n1)
         
         if [ -z "$TAILSCALE_IP" ]; then
           echo "Failed to get Tailscale IP"
-          sudo ./tailscale status
+          tailscale status
           exit 1
         fi
         
-        # Show status
-        echo "Connected to Tailscale!"
-        sudo ./tailscale status
+        echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+        tailscale status
 
     - name: Display Connection Information
       run: |
@@ -119,42 +100,13 @@ jobs:
         echo "   2. Enter: $TAILSCALE_IP:5900"
         echo "   3. Use the credentials above"
         echo ""
-        echo "   Or on Mac: Open Finder > Go > Connect to Server"
-        echo "   Enter: vnc://$TAILSCALE_IP:5900"
-        echo ""
-        echo "⚠️  IMPORTANT: Save these credentials!"
-        echo "    This password is randomly generated"
-        echo ""
         echo "=============================================="
-        echo ""
 
     - name: Keep Session Active
       run: |
-        echo "✅ System is running and ready for connection"
-        echo ""
-        echo "⏱️  The runner will stay active for 6 hours maximum"
-        echo "🛑 Cancel the workflow when you're done to free resources"
-        echo ""
-        
-        # Keep alive with status updates
-        start_time=$(date +%s)
-        max_duration=$((6 * 60 * 60))  # 6 hours in seconds
+        echo "✅ System ready - Cancel workflow when done"
         
         while true; do
-          current_time=$(date +%s)
-          elapsed=$((current_time - start_time))
-          remaining=$((max_duration - elapsed))
-          
-          if [ $elapsed -ge $max_duration ]; then
-            echo "⏰ 6-hour time limit reached. Shutting down..."
-            break
-          fi
-          
-          hours=$((remaining / 3600))
-          minutes=$(( (remaining % 3600) / 60 ))
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🟢 Runner Active | Time remaining: ${hours}h ${minutes}m"
-          echo "   Tailscale IP: $TAILSCALE_IP | User: rdp | Port: 5900"
-          
-          sleep 300  # 5 minutes
+          echo "[$(date '+%H:%M:%S')] Active | IP: $TAILSCALE_IP | User: rdp"
+          sleep 300
         done
