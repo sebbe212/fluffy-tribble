@@ -1,4 +1,4 @@
-name: CIS
+name: Setup Tailscale on macOS
 
 on:
   workflow_dispatch:
@@ -10,45 +10,110 @@ jobs:
     steps:
       - name: Install Tailscale
         run: |
+          # Download and install Tailscale
+          curl -fsSL https://pkgs.tailscale.com/stable/tailscale_latest_amd64.tgz -o tailscale.tgz
+          tar -xzf tailscale.tgz
+          
+          # Alternative: Use brew if preferred
+          # brew install tailscale
+          
+          # Or use the pkg installer with proper setup
           curl -fsSL https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg -o Tailscale-latest.pkg
           sudo installer -pkg Tailscale-latest.pkg -target /
           rm Tailscale-latest.pkg
+          
+          # Wait for installation to complete
+          sleep 5
 
-      - name: Start Tailscale with auth key
+      - name: Start Tailscale daemon
+        run: |
+          # Start Tailscale daemon in the background
+          sudo /Applications/Tailscale.app/Contents/MacOS/tailscaled > /dev/null 2>&1 &
+          
+          # Wait for daemon to start
+          sleep 10
+
+      - name: Connect to Tailscale
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Full path to Tailscale CLI
-          TAILSCALE_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-
-          sudo "$TAILSCALE_CLI" up --authkey=${TAILSCALE_AUTH_KEY} --hostname=gh-runner-${GITHUB_RUN_ID}
-
-          # Get IP
+          # Use the extracted binary or the installed one
+          if [ -f "tailscale_*/tailscale" ]; then
+            TAILSCALE_CLI="$(pwd)/tailscale_*/tailscale"
+          else
+            TAILSCALE_CLI="/Applications/Tailscale.app/Contents/MacOS/tailscale"
+          fi
+          
+          # Connect to Tailscale network
+          sudo $TAILSCALE_CLI up \
+            --authkey="${TAILSCALE_AUTH_KEY}" \
+            --hostname="gh-runner-${GITHUB_RUN_ID}" \
+            --accept-routes \
+            --accept-dns=false
+          
+          # Wait for connection
+          sleep 10
+          
+          # Get Tailscale IP with retry logic
           retry=0
-          while [ $retry -lt 10 ]; do
-            IP=$("$TAILSCALE_CLI" ip -4 | head -n1)
+          max_retries=10
+          
+          while [ $retry -lt $max_retries ]; do
+            IP=$(sudo $TAILSCALE_CLI ip -4 2>/dev/null | head -n1)
+            
             if [ -n "$IP" ]; then
               echo "TAILSCALE_IP=$IP" >> "$GITHUB_ENV"
+              echo "Successfully connected to Tailscale"
+              echo "Tailscale IP: $IP"
               break
             fi
+            
+            echo "Waiting for Tailscale IP... (attempt $((retry+1))/$max_retries)"
             sleep 5
             retry=$((retry+1))
           done
-
+          
           if [ -z "$IP" ]; then
-            echo "Tailscale IP not found. Exiting."
+            echo "Failed to get Tailscale IP after $max_retries attempts"
+            sudo $TAILSCALE_CLI status
             exit 1
           fi
 
-      - name: Show Tailscale Info
+      - name: Verify Tailscale Connection
         run: |
-          echo "Tailscale IP is $TAILSCALE_IP"
-          echo "Runner: gh-runner-${GITHUB_RUN_ID}"
+          if [ -f "tailscale_*/tailscale" ]; then
+            TAILSCALE_CLI="$(pwd)/tailscale_*/tailscale"
+          else
+            TAILSCALE_CLI="/Applications/Tailscale.app/Contents/MacOS/tailscale"
+          fi
+          
+          echo "=== Tailscale Status ==="
+          sudo $TAILSCALE_CLI status
+          echo ""
+          echo "=== Network Information ==="
+          echo "Tailscale IP: ${TAILSCALE_IP}"
+          echo "Hostname: gh-runner-${GITHUB_RUN_ID}"
+          echo ""
+          echo "=== Tailscale Version ==="
+          sudo $TAILSCALE_CLI version
 
       - name: Keep Runner Alive for Remote Debugging
         run: |
-          echo "Keeping runner alive..."
+          echo "========================================="
+          echo "Runner is now accessible via Tailscale"
+          echo "Tailscale IP: ${TAILSCALE_IP}"
+          echo "Hostname: gh-runner-${GITHUB_RUN_ID}"
+          echo "========================================="
+          echo ""
+          echo "To connect via SSH (if SSH is enabled in your Tailscale ACLs):"
+          echo "ssh runner@${TAILSCALE_IP}"
+          echo ""
+          echo "Runner will stay alive for debugging."
+          echo "Cancel the workflow when done."
+          echo "========================================="
+          
+          # Keep alive with status updates
           while true; do
-            echo "[$(date)] Runner active - Ctrl+C or Cancel to stop"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Runner active - Cancel workflow to stop"
             sleep 300
           done
